@@ -1,6 +1,6 @@
 # GreenPack EPR Reconciliation Service
 
-Small FastAPI backend for the **Innotechwise Junior AI Engineer screening task** (`Junior_AI_Engineer_Screening_Task_1.pdf`). It accepts monthly plastic declarations, reconciles them against a mock ERP feed, generates a plain-English compliance summary, and answers EPR policy questions from a small cited corpus.
+Small FastAPI backend for the **Innotechwise Junior AI Engineer screening task**. It accepts monthly plastic declarations, reconciles them against a mock ERP feed, generates a plain-English compliance summary, and answers EPR policy questions from a small cited corpus.
 
 ## Features
 
