@@ -1,109 +1,95 @@
 # GreenPack EPR Reconciliation Service
 
-Small FastAPI backend for the **Innotechwise Junior AI Engineer screening task**. It accepts monthly plastic declarations, reconciles them against a mock ERP feed, generates a plain-English compliance summary, and answers EPR policy questions from a small cited corpus.
+Backend service for **GreenPack Industries** (fictional plastic packaging producer) to support monthly **EPR** (Extended Producer Responsibility) compliance in India.
 
-## Features
+Built for the **Innotechwise Junior AI Engineer screening task**. The service accepts plastic declarations, reconciles them against a mock ERP procurement feed, generates a plain-English compliance summary, and answers policy questions from a small document corpus with citations.
 
-- `POST /submit` validates and stores a monthly declaration.
-- `GET /summary/{producer_id}/{month}` reconciles declaration data against `data/erp_feed.csv`.
-- `POST /ask` retrieves policy excerpts from `data/policies`, then (by default) uses the configured LLM to write a short grounded answer; the response always includes document/section citations for the excerpts used. Set `RAG_POLICY_LLM=false` for extractive answers only (offline-friendly).
-- Deterministic validation and reconciliation stay outside the LLM.
-- LLM is used for reconciliation narrative summaries and, when enabled, for synthesized policy answers.
-- Docker support for repeatable local review.
+**Repository:** [github.com/harshit21-shah/GreenPack-EPR-reconciliation-service---Innotechwise-screening-task](https://github.com/harshit21-shah/GreenPack-EPR-reconciliation-service---Innotechwise-screening-task)
 
-## Tech Choices
+---
 
-- API: FastAPI with Pydantic validation.
-- Storage: SQLite in `data/greenpack.db`. It is simple, local, auditable, and enough for this assignment.
-- ERP integration: CSV file in `data/erp_feed.csv`, representing a small exported feed from GreenPack's ERP.
-- LLM: configurable through `LLM_PROVIDER`.
-  - `ollama`: local Ollama with `llama3.2`.
-  - `openai`: OpenAI Chat Completions when `OPENAI_API_KEY` is present.
-- LLM fallback: deterministic summary text if Ollama is unavailable, so reviewers can still run the project without paid APIs.
-- RAG/vector store: in-memory Markdown chunks. The retriever uses Ollama embeddings when available and falls back to domain-aware keyword retrieval when offline. After retrieval, an optional LLM step rephrases the answer strictly from those chunks (`RAG_POLICY_LLM`); if the LLM is unavailable or refuses, the service falls back to joining chunk text.
-- Embedding model: `nomic-embed-text` via Ollama by default. This keeps the demo local and avoids paid API friction.
+## What it does
 
-## Setup
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /submit` | Validate and store a monthly plastic declaration |
+| `GET /summary/{producer_id}/{month}` | Reconcile declaration vs ERP; return structured rows + narrative |
+| `POST /ask` | Answer EPR policy questions with document/section citations |
+
+Interactive API docs: **http://127.0.0.1:8000/docs** (after starting the server).
+
+---
+
+## Quick start
+
+### 1. Install and run
 
 ```bash
 python -m venv .venv
+# Windows
 .venv\Scripts\activate
+# macOS/Linux
+# source .venv/bin/activate
+
 pip install -r requirements.txt
-```
-
-Run the API:
-
-```bash
 uvicorn app.main:app --reload
 ```
 
-Optional Ollama setup:
+### 2. Run all three endpoints (demo script)
 
-```bash
-ollama pull llama3.2
-ollama pull nomic-embed-text
-ollama serve
-```
-
-If Ollama is not running, `/summary` still returns a deterministic offline narrative.
-
-Optional OpenAI setup:
-
-```bash
-copy .env.example .env
-```
-
-Then set `LLM_PROVIDER=openai`, `OPENAI_API_KEY`, and `OPENAI_MODEL` in `.env`.
-
-Docker:
-
-```bash
-docker compose up --build
-```
-
-The Compose file starts the API and an Ollama container. Pull `llama3.2` and `nomic-embed-text` inside the Ollama container before expecting generated summaries or embedding retrieval.
-
-## Demo
-
-PowerShell:
+**Windows (PowerShell):**
 
 ```powershell
 .\scripts\demo.ps1
 ```
 
-Bash:
+**macOS/Linux:**
 
 ```bash
 bash scripts/demo.sh
 ```
 
-The demo submits a declaration, calls reconciliation, and asks a policy question.
+### 3. Run tests
 
-## Example Requests
+```bash
+pytest
+```
 
-Submit a declaration:
+---
+
+## Example requests
+
+**Submit declaration**
 
 ```bash
 curl -X POST http://127.0.0.1:8000/submit \
   -H "Content-Type: application/json" \
-  -d '{ "producer_id": "GREENPACK-001", "month": "2026-04", "declared_quantities_kg": { "rigid_plastic": 12000, "flexible_plastic": 8500, "multilayer_plastic": 3200 } }'
+  -d '{
+    "producer_id": "GREENPACK-001",
+    "month": "2026-04",
+    "declared_quantities_kg": {
+      "rigid_plastic": 12000,
+      "flexible_plastic": 8500,
+      "multilayer_plastic": 3200
+    }
+  }'
 ```
 
-Get summary:
+**Reconciliation summary** (requires a prior submit for the same producer/month)
 
 ```bash
 curl http://127.0.0.1:8000/summary/GREENPACK-001/2026-04
 ```
 
-Ask a policy question:
+**Policy question**
 
 ```bash
 curl -X POST http://127.0.0.1:8000/ask \
   -H "Content-Type: application/json" \
-  -d '{ "question": "What evidence should GreenPack keep for an audit?" }'
+  -d '{"question": "What evidence should GreenPack keep for an audit?"}'
 ```
 
-Unsupported questions return:
+**Off-corpus question** (no hallucination)
 
 ```json
 {
@@ -112,39 +98,145 @@ Unsupported questions return:
 }
 ```
 
-## RAG Corpus Sources
+---
 
-The corpus uses fabricated mock policy notes for this assignment, allowed by the brief:
+## Endpoint behavior
 
-- `data/policies/producer_registration.md`
-- `data/policies/category_reporting.md`
-- `data/policies/target_compliance.md`
-- `data/policies/audit_evidence.md`
+### `POST /submit`
 
-Each answer cites the source document and section title.
+- Validates with **Pydantic**: required fields, `YYYY-MM` month, all three plastic categories, no negative weights.
+- Persists to **SQLite** with generated `record_id` and UTC `created_at`.
+- **Does not call an LLM** — validation and storage are deterministic.
 
-## Validation Rules
+### `GET /summary/{producer_id}/{month}`
 
-`POST /submit` rejects:
+1. Loads the stored declaration.
+2. Loads procurement totals from **`data/erp_feed.csv`** (mock ERP export).
+3. For each category, computes variance and flags if **absolute percent difference > 5%**.
+4. Uses an **LLM** to write a **3–5 sentence** narrative from the structured reconciliation JSON (narrative only — not re-computing numbers).
+5. Returns `reconciliation` rows plus `narrative` and `overall_status` (`within_tolerance` or `needs_review`).
 
-- missing required fields
-- negative category weights
-- months outside `YYYY-MM` format
-- missing or unknown plastic categories
-
-The endpoint does not call an LLM because validation is deterministic.
-
-## Reconciliation Logic
-
-For each category:
+**Reconciliation rule**
 
 ```text
 variance_kg = declared_kg - procured_kg
-variance_percent = abs(variance_kg) / procured_kg * 100
+variance_percent = abs(variance_kg) / procured_kg * 100   (0 procured: 0% if declared 0, else 100%)
 flagged = variance_percent > 5
 ```
 
-The endpoint returns both structured reconciliation rows and the narrative summary.
+### `POST /ask`
+
+1. Chunks **`data/policies/*.md`** by section.
+2. Retrieves relevant chunks (Ollama embeddings when available; **keyword + synonym** fallback offline).
+3. Optionally synthesizes a short answer from retrieved text only (`RAG_POLICY_LLM`, default `true`).
+4. Returns **citations** (`document`, `section`) for chunks used.
+5. If nothing matches confidently, returns the exact refusal string above with **empty citations**.
+
+---
+
+## Tech choices (per assignment brief)
+
+### LLM — `llama3.2` via Ollama (default)
+
+- **Why:** Matches Innotechwise’s local, no-cost workflow; reviewers can run without paid API keys.
+- **Used for:** `/summary` narrative; optional grounded rephrasing on `/ask` when `RAG_POLICY_LLM=true`.
+- **Alternative:** `LLM_PROVIDER=openai` with `OPENAI_API_KEY` (see `.env.example`).
+- **Fallback:** Deterministic summary text and extractive policy answers when the model is unreachable.
+
+### Embeddings — `nomic-embed-text` via Ollama
+
+- **Why:** Local semantic retrieval for `/ask` without embedding API cost.
+- **Fallback:** Domain-aware keyword retrieval with synonym expansion when embeddings are unavailable.
+
+### Storage — SQLite (`data/greenpack.db`)
+
+- **Why:** Simple, auditable, sufficient for a screening prototype; one declaration per producer/month.
+
+### ERP integration — CSV (`data/erp_feed.csv`)
+
+- **Why:** Clear integration boundary; easy for reviewers to inspect sample procurement data.
+- ERP rows are **cached in memory** after first read to avoid re-parsing the CSV on every summary request.
+
+### Vector store — in-memory chunk index
+
+- **Why:** Small fixed corpus (four mock policy files); no extra infrastructure for a 4–6 hour task.
+- **Trade-off:** Not durable across restarts; production would use Chroma, pgvector, or similar.
+
+---
+
+## RAG corpus sources
+
+Mock policy notes (allowed by the brief; not legal advice):
+
+| File | Topic |
+|------|--------|
+| `data/policies/producer_registration.md` | Producer onboarding |
+| `data/policies/category_reporting.md` | Category reporting |
+| `data/policies/target_compliance.md` | Target compliance |
+| `data/policies/audit_evidence.md` | Audit evidence |
+
+---
+
+## Optional: Ollama and OpenAI
+
+**Ollama (recommended for full demo)**
+
+```bash
+ollama pull llama3.2
+ollama pull nomic-embed-text
+ollama serve
+```
+
+**OpenAI**
+
+```bash
+copy .env.example .env   # Windows
+# cp .env.example .env   # macOS/Linux
+```
+
+Set `LLM_PROVIDER=openai`, `OPENAI_API_KEY`, and `OPENAI_MODEL` in `.env`.
+
+**Environment variables**
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `LLM_PROVIDER` | `ollama` | Summary + policy synthesis provider |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API |
+| `OLLAMA_MODEL` | `llama3.2` | Text generation |
+| `OLLAMA_EMBEDDING_MODEL` | `nomic-embed-text` | Retrieval embeddings |
+| `RAG_EMBEDDING_PROVIDER` | `ollama` | Use `keyword` for offline retrieval only |
+| `RAG_POLICY_LLM` | `true` | `false` = extractive `/ask` answers only |
+
+---
+
+## Docker
+
+```bash
+docker compose up --build
+```
+
+Starts the API and an Ollama service. Pull `llama3.2` and `nomic-embed-text` inside the Ollama container before expecting LLM summaries or embedding-based retrieval.
+
+---
+
+## Project layout
+
+```text
+app/
+  main.py           # FastAPI routes
+  schemas.py        # Pydantic models + validation
+  storage.py        # SQLite persistence
+  reconciliation.py # ERP load + 5% variance logic
+  llm.py            # Summary + grounded policy synthesis
+  rag.py            # Chunking, retrieval, citations
+data/
+  erp_feed.csv      # Mock ERP procurement
+  policies/         # RAG corpus (Markdown)
+tests/              # pytest suite
+scripts/            # demo.ps1, demo.sh
+```
+
+---
 
 ## Tests
 
@@ -152,75 +244,40 @@ The endpoint returns both structured reconciliation rows and the narrative summa
 pytest
 ```
 
-Included test files:
+| File | Covers |
+|------|--------|
+| `tests/test_validation.py` | Negative weights, invalid month |
+| `tests/test_reconciliation.py` | 5% threshold, zero-procurement edge case |
+| `tests/test_rag.py` | Supported questions, refusal, paraphrase |
+| `tests/test_api.py` | End-to-end `/submit` → `/summary` → `/ask` |
 
-- `tests/test_validation.py`
-- `tests/test_reconciliation.py`
-- `tests/test_rag.py`
-- `tests/test_api.py`
+---
 
-The tests cover validation, the 5% reconciliation threshold, the zero-procurement edge case, supported RAG answers (extractive mode in CI), unsupported RAG refusal, and an API-level flow test for `/submit`, `/summary`, and `/ask`.
+## AI coding assistant usage
 
-## Assignment alignment (screening brief)
+**Cursor** (and related tools) were used to scaffold the FastAPI layout, split modules, draft tests and documentation, and iterate on RAG/LLM fallback behavior.
 
-This repository implements **Innotechwise — Junior AI Engineer Screening Task** (`Junior_AI_Engineer_Screening_Task_1.pdf`). Mapping:
+**Reviewed manually:** validation rules, reconciliation math (including zero procured), retrieval score thresholds, and refusal handling so deterministic logic stays correct regardless of model availability.
 
-| Brief requirement | In this repo |
-|-------------------|--------------|
-| `POST /submit` — deterministic validation (Pydantic), `record_id` + timestamp, no LLM | `app/schemas.py`, `app/storage.py`, `app/main.py` |
-| `GET /summary/{producer_id}/{month}` — load declaration + mock ERP, flag **> 5%** variance, LLM **3–5 sentence** narrative from structured data | `app/reconciliation.py`, `app/llm.py`, `app/main.py`, `data/erp_feed.csv` |
-| `POST /ask` — RAG over **3–5** docs, answers with **document + section** citations, refuse with exact **"I do not know based on the provided documents"** | `app/rag.py`, `data/policies/*.md` (four mock notes), citations in `AskResponse` |
-| Sample **curl** / **script** — all three endpoints in sequence | README examples; `scripts/demo.ps1`, `scripts/demo.sh` |
-| README: LLM + **embedding** choice and why; **storage** + **vector** approach; **AI assistant** usage; **one thing** with another day | Tech Choices, AI Coding Assistant Usage, What I Would Do Differently, RAG Corpus Sources |
+---
 
-**Not enforced by code (complete these for submission):** public **GitHub** link, **~90-second Loom** (see below), and reply on the **same channel** with **GitHub + Loom** links, **within the deadline** in the brief (typically **3 days** from receiving the task).
+## Architectural trade-off
 
-**From the brief:** reviewers score six dimensions (customer solution, API design, integration, LLM use, architectural judgment, vibe coding). Hitting **at least four** well is described as a strong submission—you do not need to excel at every dimension in code alone.
+**SQLite + CSV + in-memory RAG** instead of production ERP APIs and a persistent vector database.
 
-## Submission checklist
+- **Benefit:** Fast to ship, easy for reviewers to run and inspect; clear separation between deterministic compliance logic and LLM narrative.
+- **Cost:** Not multi-tenant or production-hardened; embedding index is rebuilt on startup.
 
-**Repository (before sharing the GitHub link):**
+---
 
-- `app/`
-- `data/erp_feed.csv`
-- `data/policies/`
-- `tests/`
-- `scripts/`
-- `requirements.txt`
-- `.env.example`
-- `Dockerfile`
-- `docker-compose.yml`
-- `README.md`
+## What I would do with another day
 
-**Per the PDF (full submission package):**
+- Ingest **real CPCB / public** policy PDFs into the corpus.
+- Persist embeddings in **Chroma** or **pgvector**.
+- Add **auth** per producer and an admin endpoint to refresh ERP and policy indexes.
 
-- Repository is **public** on GitHub (unless they specify otherwise).
-- **~90-second Loom** with **(a)** demo, **(b)** AI-tool screen recording, **(c)** one architectural trade-off (see Loom section below).
-- Send **GitHub link + Loom link** on the **same channel** you received the task, **before the deadline**.
+---
 
-## AI Coding Assistant Usage
+## Author
 
-I used Codex to scaffold the FastAPI project, split responsibilities into small modules, and generate the first pass of tests and documentation. I reviewed the deterministic logic manually, especially the validation boundary, zero-procurement reconciliation edge case, and the LLM/RAG fallback behavior.
-
-## Architectural Tradeoff
-
-I chose SQLite plus CSV because the assignment values clear integration boundaries more than infrastructure. ERP rows are cached after first load to avoid rereading the CSV on every summary request. For RAG, I chose local Ollama embeddings with a keyword fallback so the demo can run both with and without model setup. The tradeoff is that the in-memory vector layer is not durable and would need Chroma, pgvector, or another persistent index in production.
-
-## What I Would Do Differently With Another Day
-
-I would add real CPCB source documents, persist the embedding index in Chroma or pgvector, add auth around producer data, and build a small admin endpoint for refreshing ERP and policy indexes.
-
-## Loom video (official brief: ~90 seconds total)
-
-The PDF asks for a **~90 second** Loom with **three** segments. Keep each segment tight so the full video stays under the limit.
-
-**(a) Demo — one flow end-to-end (brief: “one endpoint”; showing submit → summary is ideal)**  
-Record `POST /submit` then `GET /summary/...` in the browser (`/docs`) or terminal (e.g. `demo.ps1`), so reviewers see validation, reconciliation JSON, and the narrative.
-
-**(b) Vibe coding — visible AI interaction**  
-Short screen recording of **Cursor / Claude Code / Copilot** (or similar) while you **write or refactor** one real slice of this repo (for example a test or a small function), not only the final code.
-
-**(c) One architectural trade-off**  
-One clear choice and why (good talking points: SQLite + CSV + cached ERP read; in-memory RAG + Ollama embeddings + keyword fallback; LLM only for narrative/synthesis with deterministic core; deterministic summary fallback when no model is up).
-
-Optional if you have a few seconds left: a quick `POST /ask` with citations—still keep total time **~90 seconds**.
+**Harshit Shah** — Innotechwise Junior AI Engineer screening submission.
